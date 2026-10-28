@@ -1,0 +1,195 @@
+local function createBaothichlamcodeConfigStore(d)
+    local A = { Accent = "DEC173", RainbowUI = false, Selected = "", Storage = "BAOTHICHLAMCODE🇻🇳 Session only", Notice = "" }
+    local document = { schema = 1, profiles = {}, accent = A.Accent, rainbowUI = false, selected = "" }
+    local blockedFile = false
+    local boolKeys = { "Enabled", "CloseRangeRush", "HighBallJumps", "JumpThenDive",
+        "BackwardRecovery", "PositionAssist", "PreShotCoverage", "RespectManualMovement" }
+    local diveModes = { SMART = true, FORWARD = true, LEFT = true, RIGHT = true, SIDES = true }
+    local function copy(value)
+        if type(value) ~= "table" then return value end
+        local result = {}
+        for key, item in pairs(value) do result[key] = copy(item) end
+        return result
+    end
+    function A.Color(value)
+        if type(value) ~= "string" then return nil end
+        local hex = value:match("^%s*#?([%x]+)%s*$")
+        return hex and #hex == 6 and string.upper(hex) or nil
+    end
+    local function name(value)
+        if type(value) ~= "string" then return nil end
+        value = value:match("^%s*(.-)%s*$")
+        if #value < 1 or #value > 40 or value:find("[%c]") then return nil end
+        return value
+    end
+    function A.Validate(value)
+        if type(value) ~= "table" or type(value.goalkeeper) ~= "table"
+            or type(value.striker) ~= "table" or type(value.misc) ~= "table" then return nil end
+        local gk, striker, misc = {}, {}, {}
+        for _, key in ipairs(boolKeys) do
+            if type(value.goalkeeper[key]) ~= "boolean" then return nil end
+            gk[key] = value.goalkeeper[key]
+        end
+        if not diveModes[value.goalkeeper.DiveFilter] then return nil end
+        if value.goalkeeper.PositionMode ~= "THREATS"
+            and value.goalkeeper.PositionMode ~= "HOME_AND_THREATS" then return nil end
+        gk.DiveFilter, gk.PositionMode = value.goalkeeper.DiveFilter, value.goalkeeper.PositionMode
+        for _, key in ipairs({ "Enabled", "AutoCurve", "SmartRelease" }) do
+            if type(value.striker[key]) ~= "boolean" then return nil end
+            striker[key] = value.striker[key]
+        end
+        local range = value.striker.Range
+        if type(range) ~= "number" or range ~= range or range < 40 or range > 100 then return nil end
+        striker.Range = math.floor(range + 0.5)
+        for _, key in ipairs({ "AutoDribble" }) do
+            if type(value.misc[key]) ~= "boolean" then return nil end
+            misc[key] = value.misc[key]
+        end
+        local accent = A.Color(value.accent)
+        if not accent then return nil end
+        if value.rainbowUI ~= nil and type(value.rainbowUI) ~= "boolean" then return nil end
+        return { goalkeeper = gk, striker = striker, misc = misc, accent = accent, rainbowUI = value.rainbowUI == true }
+    end
+    local function decode(raw)
+        if type(raw) ~= "string" or #raw > 262144 then return false end
+        local ok, value = pcall(d.decode, raw)
+        if not ok or type(value) ~= "table" or value.schema ~= 1 or type(value.profiles) ~= "table" then return false end
+        local profiles, count = {}, 0
+        for key, profile in pairs(value.profiles) do
+            local validName, validProfile = name(key), A.Validate(profile)
+            if validName == key and validProfile and count < 50 then
+                profiles[key], count = validProfile, count + 1
+            else A.Notice = "Some invalid configs were skipped." end
+        end
+        document = { schema = 1, profiles = profiles, accent = A.Color(value.accent) or A.Accent,
+            rainbowUI = value.rainbowUI == true,
+            selected = name(value.selected) or "",
+            acknowledgedVersion = type(value.acknowledgedVersion) == "string" and value.acknowledgedVersion or nil }
+        if not profiles[document.selected] then document.selected = "" end
+        return true
+    end
+    local canFile = type(d.read) == "function" and type(d.write) == "function"
+    if type(d.cache) == "string" then decode(d.cache) end
+    if canFile then
+        local exists = true
+        if type(d.exists) == "function" then
+            local ok, result = pcall(d.exists, d.path)
+            if ok then exists = result == true end
+        end
+        if exists then
+            local ok, raw = pcall(d.read, d.path)
+            if ok and not decode(raw) then
+                blockedFile = true
+                A.Notice = "Settings file is unreadable; saved configs in that file were kept untouched."
+            elseif not ok and type(d.exists) == "function" then
+                blockedFile = true
+                A.Notice = "Settings file could not be read; using this session."
+            end
+        end
+        A.Storage = blockedFile and "BAOTHICHLAMCODE🇻🇳 Session only · file unavailable" or "BAOTHICHLAMCODE🇻🇳 Local file · " .. d.path
+    end
+    A.Accent, A.RainbowUI, A.Selected = document.accent, document.rainbowUI, document.selected
+    local function persist()
+        document.accent, document.rainbowUI, document.selected = A.Accent, A.RainbowUI, A.Selected
+        local ok, encoded = pcall(d.encode, document)
+        if not ok then return false, "Could not encode settings." end
+        d.remember(encoded)
+        if canFile and not blockedFile then
+            local written, result = pcall(d.write, d.path, encoded)
+            if written and result ~= false then A.Storage = "BAOTHICHLAMCODE🇻🇳 Local file · " .. d.path; return true, "Saved to local file." end
+            A.Storage = "BAOTHICHLAMCODE🇻🇳 Session only · file write failed"
+            return true, "Saved for this session; the executor could not write the file."
+        end
+        return true, "Saved for this session; file storage is unavailable."
+    end
+    function A.List()
+        local names = {}
+        for key in pairs(document.profiles) do names[#names + 1] = key end
+        table.sort(names, function(a, b)
+            if string.lower(a) == string.lower(b) then return a < b end
+            return string.lower(a) < string.lower(b)
+        end)
+        return names
+    end
+    function A.Select(value)
+        if not document.profiles[value] then return false end
+        A.Selected = value
+        return true
+    end
+    function A.Save(value, profile, creating)
+        local validName, validProfile = name(value), A.Validate(profile)
+        if not validName then return false, "Enter a config name (1–40 characters)." end
+        if not validProfile then return false, "Current settings could not be saved." end
+        if creating and document.profiles[validName] then return false, "Name already exists. Select it and press Save." end
+        if not creating and not document.profiles[validName] then return false, "Select a config before saving." end
+        if creating and #A.List() >= 50 then return false, "Config limit reached (50)." end
+        local previous, selected = document.profiles[validName], A.Selected
+        document.profiles[validName], A.Selected = validProfile, validName
+        local ok, detail = persist()
+        if not ok then document.profiles[validName], A.Selected = previous, selected end
+        return ok, detail
+    end
+    function A.Get(value)
+        return copy(document.profiles[value])
+    end
+    function A.SetAppearance(value, rainbow)
+        local hex = A.Color(value)
+        if not hex then return false, "Use a six-digit hex color, for example #DEC173." end
+        if type(rainbow) ~= "boolean" then return false, "Rainbow UI must be on or off." end
+        local previousAccent, previousRainbow = A.Accent, A.RainbowUI
+        A.Accent, A.RainbowUI = hex, rainbow
+        local ok, detail = persist()
+        if not ok then A.Accent, A.RainbowUI = previousAccent, previousRainbow end
+        return ok, detail
+    end
+    function A.SetAccent(value)
+        return A.SetAppearance(value, A.RainbowUI)
+    end
+    function A.SetRainbowUI(value)
+        return A.SetAppearance(A.Accent, value)
+    end
+    function A.ShouldPrompt(previousBuild, currentBuild)
+        if document.acknowledgedVersion then return document.acknowledgedVersion ~= d.version end
+        return type(previousBuild) == "string" and previousBuild ~= currentBuild
+    end
+    function A.Acknowledge()
+        if document.acknowledgedVersion == d.version then return true end
+        document.acknowledgedVersion = d.version
+        return persist()
+    end
+    return A
+end
+
+local function createBaothichlamcodeSettingsController(d)
+    local A = {}
+    function A.Snapshot()
+        local gk = {}
+        for _, key in ipairs({ "CloseRangeRush", "HighBallJumps", "JumpThenDive", "BackwardRecovery",
+            "PositionAssist", "PreShotCoverage", "RespectManualMovement", "PositionMode" }) do gk[key] = d.config[key] end
+        gk.Enabled = d.gkEnabled()
+        gk.DiveFilter = d.config.DiveFilter == "ALL" and "SMART" or d.config.DiveFilter
+        return { goalkeeper = gk,
+            striker = { Enabled = d.striker.Enabled, AutoCurve = d.striker.AutoCurve,
+                SmartRelease = d.striker.SmartRelease, Range = d.striker.GetAssistRange() },
+            misc = { AutoDribble = d.misc.AutoDribble },
+            accent = d.accent(), rainbowUI = d.rainbow and d.rainbow() == true or false }
+    end
+    local function apply(profile)
+        local function feature(object, key, value)
+            if object[key] == value then return end
+            assert(object["Set" .. key](value) ~= false, key .. " could not be changed")
+            assert(object[key] == value, key .. " did not accept the setting")
+        end
+        feature(d.striker, "AutoCurve", profile.striker.AutoCurve)
+        feature(d.striker, "SmartRelease", profile.striker.SmartRelease)
+        feature(d.striker, "Enabled", profile.striker.Enabled)
+        assert(d.striker.SetAssistRange(profile.striker.Range) ~= false, "Shot range could not be changed")
+        feature(d.misc, "AutoDribble", profile.misc.AutoDribble)
+        for key, value in pairs(profile.goalkeeper) do 
+            if key ~= "Enabled" then 
+                d.config[key] = value 
+            end 
+        end
+    end
+    return A
+end
